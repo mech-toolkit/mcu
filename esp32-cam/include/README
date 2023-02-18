@@ -1,0 +1,8 @@
+Mechs don't need Readme's [-]
+
+But if you are looking for the libraries they are stored in the "lib" directory
+
+ESP32        = https://github.com/espressif/arduino-esp32
+ServoESP32   = https://github.com/MechicsBrno/ServoESP32
+WiFiManager  = WiFiManager by tzapu - https://github.com/tzapu/WiFiManager
+Ultrasonic   = https://github.com/ErickSimoes/Ultrasonic
