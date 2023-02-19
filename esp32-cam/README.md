@@ -1,4 +1,4 @@
-# Software for the bot
+# Embedded software for the mech
 
 This is a Platformio project directory.
 
