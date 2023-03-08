@@ -5,12 +5,15 @@
                 newtwork, streams video and waits for commands.
   Authors     : Ken, Ric
   Created     : 20221231
-  Version     : 2.0.1 - 20230216
+  Version     : 2.1.0 - 20230308
   ||||
   Notes:
   On first setup of the MECH scan your Wifi network to discover the ESP WiFi Manager.
   The SSID for the network is "MECH_AP" This service will allow you to select your
   local Wifi network and add the MECH to it plus configure some paramters
+  ||||
+  Error Codes/RED LED Flashes
+  1 = Hearbeat (OK), 2 = Wifi Connecting, 3 = UDP error, 4 = Wifi AP Config Mode
 **********************************************************************/
 //
 //
@@ -87,7 +90,12 @@ const char *ssid = "####";      // input your wifi name
 const char *password = "#####"; // input your wifi password
 
 TaskHandle_t punch_handle = NULL;
-
+TaskHandle_t ledRedFlash_handle = NULL;
+// LED Flashing Delay
+volatile int flashDelay = 333;
+volatile int errorFlash = 0;
+volatile int errorDelay = 1000;
+//
 // Servo setup
 Servo punchServo;
 Servo leftServo;
@@ -118,6 +126,32 @@ void punch(void *parameters)
     punchServo.write(punchHit);
     vTaskDelay(620 / portTICK_PERIOD_MS);
     punchServo.write(punchHome);
+  }
+}
+
+void ledRedFlash(void *parameters)
+{
+  // 1 = Hearbeat (OK), 2 = Wifi Connecting, 3 = UDP error, 4 = Wifi AP Config Mode
+  // Flash LED
+  int currentFlashDelay = flashDelay; // read the initial flashDelay value
+  while (1)
+  {
+    // ulTaskNotifyTake(pdTRUE, portMAX_DELAY); // wait for a notification
+    if (flashDelay != currentFlashDelay)
+    {                                 // check if the flashDelay value has changed
+      currentFlashDelay = flashDelay; // update the current flashDelay value
+    }
+    for (int i = 0; i < errorFlash; i++)
+    {
+      digitalWrite(LED_BUILTIN, LOW);
+      vTaskDelay(currentFlashDelay / portTICK_PERIOD_MS);
+      digitalWrite(LED_BUILTIN, HIGH);
+      vTaskDelay(currentFlashDelay / portTICK_PERIOD_MS);
+    }
+    if (errorFlash > 1)
+    {
+      vTaskDelay(errorDelay / portTICK_PERIOD_MS); // delay for 1000ms
+    }
   }
 }
 
@@ -389,6 +423,7 @@ void initServos()
 
 bool initWifi(bool forceConfig)
 {
+  errorFlash = 2; // 1 = Hearbeat (OK), 2 = Wifi Connecting, 3 = UDP error, 4 = Wifi AP Config Mode
   WiFi.setSleep(false);
   WiFiManager wm;
   WiFi.mode(WIFI_STA); // Explicitly set WiFi mode
@@ -417,6 +452,7 @@ bool initWifi(bool forceConfig)
   //
   if (forceConfig) // Run if we need a configuration
   {
+    errorFlash = 4; // 1 = Hearbeat (OK), 2 = Wifi Connecting, 3 = UDP error, 4 = Wifi AP Config Mode
     if (!wm.startConfigPortal("MECH_AP", ""))
     {
       Serial.println("failed to connect and hit timeout");
@@ -441,7 +477,6 @@ bool initWifi(bool forceConfig)
   //
   //
   Serial.println("");
-  digitalWrite(LED_BUILTIN, HIGH);
   Serial.println("WiFi connected");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
@@ -469,15 +504,6 @@ bool initWifi(bool forceConfig)
     saveConfigFile();
   }
   return 1;
-}
-
-void flashRedLed(int pulse)
-{
-  // Flash LED
-  digitalWrite(LED_BUILTIN, HIGH);
-  delay(pulse);
-  digitalWrite(LED_BUILTIN, LOW);
-  delay(pulse);
 }
 
 bool udpReceive()
@@ -569,13 +595,22 @@ bool udpSetup()
 
 void isUdpRunning()
 {
-  while (!udpIsSetup)
+  if (!udpIsSetup)
   {
-    Serial.println("Attempting to connect to RFC Server");
-    udpSend(senderIP, String(roboName) + "|" + VERSION);
-    udpIsSetup = udpSetup();
-    udp.flush();
-    flashRedLed(500);
+    if (errorFlash != 3)
+    {
+      errorFlash = 3; // 1 = Hearbeat (OK), 2 = Wifi Connecting, 3 = UDP error, 4 = Wifi AP Config Mode
+    }
+    while (!udpIsSetup)
+    {
+      Serial.println("Attempting to connect to RFC Server");
+      udpSend(senderIP, String(roboName) + "|" + VERSION);
+      udpIsSetup = udpSetup();
+      udp.flush();
+      delay(500);
+    }
+    errorFlash = 1; // 1 = Hearbeat (OK), 2 = Wifi Connecting, 3 = UDP error, 4 = Wifi AP Config Mode
+    // vTaskNotifyGiveFromISR(ledRedFlash_handle, NULL); // notify the task of the new flashDelay value
   }
 }
 
@@ -607,9 +642,11 @@ void setup()
   Serial.setDebugOutput(false);
   Serial.printf("MECH Version: %s \n", VERSION);
   //
+  //
   bool forceConfig = false;     //
   pinMode(LED_BUILTIN, OUTPUT); // initialize digital pin LED_BUILTIN as an output.
   digitalWrite(LED_BUILTIN, LOW);
+  xTaskCreate(ledRedFlash, "Flash LED", 1024, NULL, 1, &ledRedFlash_handle);
   //
   forceConfig = initDrd();
   forceConfig = initSpiffs(forceConfig);
@@ -622,7 +659,7 @@ void setup()
   xTaskCreate(
       punch,        // Function Name
       "Punch",      // Task Name
-      700,          // Stack Size
+      1024,         // Stack Size
       NULL,         // Task Parameters
       1,            // Task Priority
       &punch_handle // Task Handle
@@ -636,7 +673,6 @@ void setup()
 void loop()
 {
   isUdpRunning();
-  flashRedLed(20);
   udpSend(senderIP, rfcAcknowledge);
   // Serial.println("waiting for command");
   if (udpReceive())
@@ -644,9 +680,5 @@ void loop()
     Serial.println("processing command");
     motionControl();
     Serial.println("processed command");
-  }
-  else
-  {
-    delay(20);
   }
 }
